@@ -22,23 +22,24 @@ from telegram.ext import (
 # TOKEN
 BOT_TOKEN ="8626630085:AAHh6GY6zvYWuO0p5b7GPrD8bOakVMjHzao"
 
-# FLASK APP
-app_flask = Flask(__name__)
+# FLASK
+web_app = Flask(__name__)
 
-@app_flask.route("/")
+@web_app.route("/")
 def home():
-    return "Bot is Running 🔥"
+    return "Anime Bot Running 🔥"
 
-# TELEGRAM IMAGE STORE
+# STORE USER IMAGE
 user_images = {}
 
-# START COMMAND
+# START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
-        "🔥 Send me a photo and choose style!"
+        "🔥 Send me a photo"
     )
 
-# RECEIVE PHOTO
+# PHOTO RECEIVE
 async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     photo_file = await update.message.photo[-1].get_file()
@@ -51,12 +52,27 @@ async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [
-            InlineKeyboardButton("🎨 Cartoon", callback_data="cartoon"),
-            InlineKeyboardButton("🌸 Anime", callback_data="anime")
+            InlineKeyboardButton(
+                "🎨 Cartoon",
+                callback_data="cartoon"
+            ),
+
+            InlineKeyboardButton(
+                "🌸 Anime",
+                callback_data="anime"
+            )
         ],
+
         [
-            InlineKeyboardButton("🏯 Ghibli", callback_data="ghibli"),
-            InlineKeyboardButton("✏ Sketch", callback_data="sketch")
+            InlineKeyboardButton(
+                "🏯 Ghibli",
+                callback_data="ghibli"
+            ),
+
+            InlineKeyboardButton(
+                "✏ Sketch",
+                callback_data="sketch"
+            )
         ]
     ]
 
@@ -81,79 +97,110 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     input_path = user_images.get(chat_id)
 
     if not input_path:
-        await query.message.reply_text("❌ Image not found")
+
+        await query.message.reply_text(
+            "❌ No image found"
+        )
+
         return
 
-    output_path = f"output_{chat_id}.jpg"
+    try:
 
-    img = cv2.imread(input_path)
+        img = cv2.imread(input_path)
 
-    # CARTOON
-    if style == "cartoon":
+        if img is None:
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            await query.message.reply_text(
+                "❌ Failed to load image"
+            )
 
-        gray = cv2.medianBlur(gray, 5)
+            return
 
-        edges = cv2.adaptiveThreshold(
-            gray,
-            255,
-            cv2.ADAPTIVE_THRESH_MEAN_C,
-            cv2.THRESH_BINARY,
-            9,
-            9
+        output_path = f"output_{chat_id}.jpg"
+
+        # CARTOON
+        if style == "cartoon":
+
+            gray = cv2.cvtColor(
+                img,
+                cv2.COLOR_BGR2GRAY
+            )
+
+            gray = cv2.medianBlur(gray, 5)
+
+            edges = cv2.adaptiveThreshold(
+                gray,
+                255,
+                cv2.ADAPTIVE_THRESH_MEAN_C,
+                cv2.THRESH_BINARY,
+                9,
+                9
+            )
+
+            color = cv2.bilateralFilter(
+                img,
+                9,
+                250,
+                250
+            )
+
+            result = cv2.bitwise_and(
+                color,
+                color,
+                mask=edges
+            )
+
+        # ANIME
+        elif style == "anime":
+
+            result = cv2.stylization(
+                img,
+                sigma_s=60,
+                sigma_r=0.45
+            )
+
+        # GHIBLI
+        elif style == "ghibli":
+
+            result = cv2.detailEnhance(
+                img,
+                sigma_s=12,
+                sigma_r=0.15
+            )
+
+        # SKETCH
+        elif style == "sketch":
+
+            gray, result = cv2.pencilSketch(
+                img,
+                sigma_s=60,
+                sigma_r=0.07,
+                shade_factor=0.05
+            )
+
+        else:
+
+            result = img
+
+        cv2.imwrite(output_path, result)
+
+        await query.message.reply_photo(
+            photo=open(output_path, "rb"),
+            caption=f"✅ {style.upper()} Done"
         )
 
-        color = cv2.bilateralFilter(img, 9, 250, 250)
+    except Exception as e:
 
-        cartoon = cv2.bitwise_and(color, color, mask=edges)
-
-        cv2.imwrite(output_path, cartoon)
-
-    # ANIME
-    elif style == "anime":
-
-        anime = cv2.stylization(
-            img,
-            sigma_s=60,
-            sigma_r=0.45
+        await query.message.reply_text(
+            f"❌ Error:\n{e}"
         )
-
-        cv2.imwrite(output_path, anime)
-
-    # GHIBLI
-    elif style == "ghibli":
-
-        ghibli = cv2.detailEnhance(
-            img,
-            sigma_s=12,
-            sigma_r=0.15
-        )
-
-        cv2.imwrite(output_path, ghibli)
-
-    # SKETCH
-    elif style == "sketch":
-
-        gray, sketch = cv2.pencilSketch(
-            img,
-            sigma_s=60,
-            sigma_r=0.07,
-            shade_factor=0.05
-        )
-
-        cv2.imwrite(output_path, sketch)
-
-    # SEND IMAGE
-    await query.message.reply_photo(
-        photo=open(output_path, "rb"),
-        caption=f"✅ {style.upper()} Style Complete"
-    )
 
 # TELEGRAM BOT
 telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(
+    CommandHandler("start", start)
+)
 
 telegram_app.add_handler(
     MessageHandler(filters.PHOTO, photo)
@@ -165,15 +212,23 @@ telegram_app.add_handler(
 
 # RUN BOT
 def run_bot():
+
+    print("🔥 Telegram Bot Started")
+
     telegram_app.run_polling()
 
 # MAIN
 if __name__ == "__main__":
 
-    bot_thread = threading.Thread(target=run_bot)
+    threading.Thread(
+        target=run_bot
+    ).start()
 
-    bot_thread.start()
+    port = int(
+        os.environ.get("PORT", 10000)
+    )
 
-    port = int(os.environ.get("PORT", 10000))
-
-    app_flask.run(host="0.0.0.0", port=port)
+    web_app.run(
+        host="0.0.0.0",
+        port=port
+    )
