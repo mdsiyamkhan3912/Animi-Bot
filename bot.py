@@ -20,7 +20,7 @@ from telegram.ext import (
 )
 
 # TOKEN
-BOT_TOKEN = os.getenv("8626630085:AAHh6GY6zvYWuO0p5b7GPrD8bOakVMjHzao")
+BOT_TOKEN ="8626630085:AAHh6GY6zvYWuO0p5b7GPrD8bOakVMjHzao"
 
 # FLASK APP
 app_flask = Flask(__name__)
