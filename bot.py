@@ -1,171 +1,515 @@
 import os
-import sys
-import logging
+import asyncio
 import threading
+import requests
+import json
+
 from flask import Flask
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from PIL import Image, ImageDraw, ImageFont
 
-# --- [CRITICAL FIX] MoviePy-এর ভেতরের ANTIALIAS এরর চিরতরে দূর করার ম্যাজিক লজিক ---
-# কোডটি রান হওয়া মাত্রই গ্লোবালি এবং moviepy-এর ভেতরের মডিউলে ANTIALIAS ফিক্স করে দেবে
-if not hasattr(Image, 'ANTIALIAS'):
-    Image.ANTIALIAS = Image.Resampling.LANCZOS
-    
-# moviepy যেখানে ইমেজ প্রসেস করে, সেখানে জোরপূর্বক এটি ইমপোর্ট করিয়ে দেওয়া
-try:
-    import moviepy.video.fx.all as mv_fx
-    import moviepy.video.VideoClip as mv_clip
-    mv_clip.Image.ANTIALIAS = Image.Resampling.LANCZOS
-except Exception:
-    pass
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart
+from aiogram.types import (
+    Message,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
 
-# এবার সেফলি moviepy ইমপোর্ট করা হচ্ছে
-from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
-# ---------------------------------------------------------------------------------
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
 
-# লগিং সেটআপ
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# ======================================================
+# BOT TOKEN
+# ======================================================
 
-# তোমার দেওয়া টেস্ট টোকেন
-TOKEN = "8716578947:AAG1tliMeUj78ZsYBEvi1YI8I1GhIpuV2B4"
+BOT_TOKEN ="8963746331:AAE_1Ej_BthpXDNG737xrEHsDRoSYOx7S8E"
 
-DOWNLOAD_DIR = "bot_files"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+# ======================================================
+# ADMIN IDS
+# ======================================================
 
-# ----------------- FLASK SERVER -----------------
-flask_app = Flask(__name__)
+ADMIN_IDS = [
+    5084280631
+]
 
-@flask_app.route('/')
+# ======================================================
+# FLASK KEEP ALIVE
+# ======================================================
+
+app = Flask(__name__)
+
+@app.route("/")
 def home():
-    return "বট একদম লাইভ আছে ভাই! 😎", 200
+    return "Bot Running"
 
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    flask_app.run(host='0.0.0.0', port=port)
-# ------------------------------------------------
-
-# Pillow দিয়ে হলুদ টেক্সট ব্যানার তৈরি করার ফাংশন
-def create_text_banner(width, text, font_size=32):
-    banner = Image.new("RGBA", (width, 150), (255, 255, 255, 0))
-    draw = ImageDraw.Draw(banner)
-    try:
-        font = ImageFont.load_default()
-    except:
-        font = None
-        
-    w, h = width * 0.5, 60
-    position = ((width - w) // 2, (150 - h) // 2)
-    draw.text(position, text, fill="yellow", font=font)
-    
-    banner_path = os.path.join(DOWNLOAD_DIR, "temp_banner.png")
-    banner.save(banner_path)
-    return banner_path
-
-# /start কমান্ড হ্যান্ডলার
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    await update.message.reply_text(
-        "হ্যালো ভাই! ভিডিও এডিটিং বটে স্বাগতম। 😎\n\n"
-        "👉 কাজ শুরু করতে প্রথমে আপনার **ভিডিওটি** পাঠান।"
+def run_web():
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000))
     )
 
-# ভিডিও হ্যান্ডলার (ধাপ ১)
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    video_file = await update.message.video.get_file()
-    video_path = os.path.join(DOWNLOAD_DIR, f"{update.effective_user.id}_input.mp4")
-    
-    await update.message.reply_text("⏳ ভিডিওটি ডাউনলোড হচ্ছে, দয়া করে একটু অপেক্ষা করুন...")
-    await video_file.download_to_drive(video_path)
-    
-    context.user_data['video_path'] = video_path
-    await update.message.reply_text("✅ ভিডিও পেয়েছি ভাই! এবার আপনার **ছবিটি** পাঠান।")
+# ======================================================
+# BOT SETUP
+# ======================================================
 
-# ফটো হ্যান্ডলার এবং ভিডিও এডিটিং (ধাপ ২)
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if 'video_path' not in context.user_data:
-        await update.message.reply_text("⚠️ ভাই, আগে ভিডিও পাঠান, তারপর ছবি দিবেন।")
-        return
+bot = Bot(token=BOT_TOKEN)
 
-    status_message = await update.message.reply_text("⏳ ছবি পাওয়া গেছে। প্রসেসিং এবং রেন্ডারিং শুরু হচ্ছে ভাই, একটু সময় লাগবে...")
-    
-    photo_file = await update.message.photo[-1].get_file()
-    photo_path = os.path.join(DOWNLOAD_DIR, f"{update.effective_user.id}_user_photo.png")
-    await photo_file.download_to_drive(photo_path)
-    
-    video_path = context.user_data['video_path']
-    output_path = os.path.join(DOWNLOAD_DIR, f"{update.effective_user.id}_output.mp4")
+dp = Dispatcher(
+    storage=MemoryStorage()
+)
+
+# ======================================================
+# STATES
+# ======================================================
+
+class PaymentState(StatesGroup):
+
+    waiting_for_eiin = State()
+
+    waiting_for_student = State()
+
+# ======================================================
+# BUTTONS
+# ======================================================
+
+main_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [
+            KeyboardButton(
+                text="EIIN Number"
+            )
+        ]
+    ],
+    resize_keyboard=True
+)
+
+# ======================================================
+# GET STUDENT
+# ======================================================
+
+def get_student(eiin, student_id):
+
+    url = "https://api.eims.live/api/payment-portal/student-login"
+
+    payload = {
+        "institute_id": eiin,
+        "custom_student_id": student_id
+    }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
 
     try:
-        # --- MoviePy ভিডিও এডিটিং শুরু ---
-        video = VideoFileClip(video_path)
-        
-        # ১. ইউজারের পাঠানো ছবি পজিশন (মাথার ওপরের এরিয়া)
-        user_image = (ImageClip(photo_path)
-                      .set_duration(video.duration)
-                      .resize(width=video.w * 0.35)
-                      .set_position(("center", int(video.h * 0.18))))
 
-        # ২. নিচের ফিক্সড হলুদ টেক্সট ব্যানার জেনারেশন
-        text_str = "নিঊ কালেকশন 👻👀\n🥵 লিংক কমেন্টে ✅"
-        generated_banner_path = create_text_banner(video.w, text_str, font_size=int(video.w * 0.045))
-        
-        banner_image = (ImageClip(generated_banner_path)
-                        .set_duration(video.duration)
-                        .set_position(("center", int(video.h * 0.75))))
-
-        # ৩. লেয়ারগুলো একসাথে কম্বাইন করা
-        final_video = CompositeVideoClip([video, user_image, banner_image])
-        
-        await status_message.edit_text("🎬 ভিডিও রেন্ডারিং হচ্ছে ভাই...")
-        
-        # ক্লাউড সার্ভার রেন্ডারিং ফাস্ট করার জন্য কনফিগারেশন
-        final_video.write_videofile(
-            output_path, 
-            codec="libx264", 
-            audio_codec="aac", 
-            preset="ultrafast", 
-            threads=4
+        r = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=20
         )
-        
-        # ফাইল রিসোর্স রিলিজ করা
-        video.close()
-        final_video.close()
 
-        # ৪. ইউজারকে ফাইনাল ভিডিও পাঠানো
-        await status_message.edit_text("🚀 রেন্ডারিং শেষ! ভিডিও আপলোড হচ্ছে...")
-        await update.message.reply_video(video=open(output_path, 'rb'), caption="ভাই, আপনার এডিটেড ভিডিও রেডি! 😎")
-        
-        # স্টোরেজ খালি করতে ফাইলগুলো ডিলিট করা
-        os.remove(video_path)
-        os.remove(output_path)
-        os.remove(photo_path)
-        if os.path.exists(generated_banner_path): os.remove(generated_banner_path)
-            
-        context.user_data.clear()
-        await status_message.delete()
-        
+        data = r.json()
+
+        student = data["payload"]["data"]["student"]
+
+        token = data["payload"]["data"]["authorization"]["access_token"]
+
+        return {
+            "valid": True,
+            "internal_id": student["id"],
+            "student_id": student["student_id"],
+            "name": student["student_name"],
+            "class": student["class_name"],
+            "shift": student["shift"],
+            "department": student["department_name"],
+            "academic_year": student["academic_year"],
+            "roll": student["roll"],
+            "academic_year_id": student["academic_year_list"][0]["id"],
+            "token": token
+        }
+
     except Exception as e:
-        logging.error(f"Error: {e}")
-        await status_message.edit_text(f"❌ এরর হয়েছে ভাই: {str(e)[:50]}")
-        # এরর হলেও ফাইল সেফটি ক্লিনআপ
-        if os.path.exists(video_path): os.remove(video_path)
-        if os.path.exists(output_path): os.remove(output_path)
-        if os.path.exists(photo_path): os.remove(photo_path)
 
-def main():
-    # ব্যাকগ্রাউন্ড থ্রেডে Flask রান করা যাতে Render ওয়েব সার্ভিস এরর না দেয়
-    threading.Thread(target=run_flask, daemon=True).start()
+        print(e)
 
-    # টেলিগ্রাম বট অ্যাপ্লিকেশন চালু করা
-    app = Application.builder().token(TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.VIDEO, handle_video))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    
-    print("বট সফলভাবে চালু হয়েছে ভাই... Render-এ পুশ করে দিন!")
-    app.run_polling()
+        return {
+            "valid": False
+        }
 
-if __name__ == '__main__':
-    main()
+# ======================================================
+# GET INVOICE
+# ======================================================
+
+def get_invoice(student_internal_id, academic_year_id, token):
+
+    url = "https://api.eims.live/api/payment-portal/payment-invoice-show"
+
+    params = {
+        "academic_year_id": academic_year_id,
+        "student_id": student_internal_id
+    }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Authorization": f"Bearer {token}"
+    }
+
+    try:
+
+        r = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=20
+        )
+
+        data = r.json()
+
+        invoices = data["payload"]["data"]["enlistment_list"]["data"]
+
+        if len(invoices) == 0:
+
+            return {
+                "valid": False
+            }
+
+        inv = invoices[0]
+
+        invoice_number = inv.get("invoice", "N/A")
+
+        # ==========================================
+        # FULL INVOICE DETAILS
+        # ==========================================
+
+        details_url = f"https://api.eims.live/api/invoice-details?invoice={invoice_number}"
+
+        details = requests.get(
+            details_url,
+            headers=headers,
+            timeout=20
+        ).json()
+
+        invoice = details["payload"]["data"]["invoice"]
+
+        payee = json.loads(
+            invoice["payee_info"]
+        )
+
+        return {
+            "valid": True,
+            "invoice": invoice.get("invoice", "N/A"),
+            "payment_date": invoice.get("payment_date", "N/A"),
+            "phone": payee.get("contact", "N/A")
+        }
+
+    except Exception as e:
+
+        print(e)
+
+        return {
+            "valid": False
+        }
+
+# ======================================================
+# START
+# ======================================================
+
+@dp.message(CommandStart())
+async def start(message: Message):
+
+    if message.from_user.id not in ADMIN_IDS:
+
+        await message.answer(
+            "❌ Access Denied"
+        )
+
+        return
+
+    await message.answer(
+        "✅ Welcome To Student Payment Bot",
+        reply_markup=main_keyboard
+    )
+
+# ======================================================
+# EIIN BUTTON
+# ======================================================
+
+@dp.message(F.text == "EIIN Number")
+async def eiin_button(message: Message, state: FSMContext):
+
+    await message.answer(
+        "📚 Send Institute EIIN Number"
+    )
+
+    await state.set_state(
+        PaymentState.waiting_for_eiin
+    )
+
+# ======================================================
+# SAVE EIIN
+# ======================================================
+
+@dp.message(PaymentState.waiting_for_eiin)
+async def save_eiin(message: Message, state: FSMContext):
+
+    eiin = message.text.strip()
+
+    await state.update_data(
+        eiin=eiin
+    )
+
+    await message.answer(
+        f"✅ Institute Saved : {eiin}\n\n"
+        f"Now Send Student ID OR Range\n\n"
+        f"Example:\n"
+        f"10032566\n\n"
+        f"OR\n\n"
+        f"10032566-10032666"
+    )
+
+    await state.set_state(
+        PaymentState.waiting_for_student
+    )
+
+# ======================================================
+# SEARCH SYSTEM
+# ======================================================
+
+@dp.message(PaymentState.waiting_for_student)
+async def search_student(message: Message, state: FSMContext):
+
+    text_input = message.text.strip()
+
+    data = await state.get_data()
+
+    eiin = data.get("eiin")
+
+    if not eiin:
+
+        await message.answer(
+            "❌ First Set EIIN Number"
+        )
+
+        return
+
+    # ==================================================
+    # RANGE SEARCH
+    # ==================================================
+
+    if "-" in text_input:
+
+        try:
+
+            start, end = map(
+                int,
+                text_input.split("-")
+            )
+
+            total = end - start + 1
+
+            if total > 2000:
+
+                await message.answer(
+                    "❌ Maximum 2000 IDs Allowed"
+                )
+
+                return
+
+            await message.answer(
+                f"🔍 Scanning {total} IDs..."
+            )
+
+            found = 0
+
+            for sid in range(start, end + 1):
+
+                student = get_student(
+                    eiin,
+                    str(sid)
+                )
+
+                if not student["valid"]:
+                    continue
+
+                invoice = get_invoice(
+                    student["internal_id"],
+                    student["academic_year_id"],
+                    student["token"]
+                )
+
+                if not invoice["valid"]:
+                    continue
+
+                found += 1
+
+                phone = invoice["phone"]
+
+                if phone.startswith("0"):
+
+                    whatsapp = "88" + phone
+
+                else:
+
+                    whatsapp = phone
+
+                buttons = InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="WhatsApp",
+                                url=f"https://wa.me/{whatsapp}"
+                            ),
+
+                            InlineKeyboardButton(
+                                text="Telegram",
+                                url="https://t.me/Automate_IT_Ltd_Bot"
+                            )
+                        ]
+                    ]
+                )
+
+                text = f"""
+━━━━━━━━━━━━━━
+🎓 STUDENT PAYMENT INFO
+━━━━━━━━━━━━━━
+
+🧾 Invoice Number : {invoice['invoice']}
+👤 Name : {student['name']}
+🆔 Student ID : {student['student_id']}
+📞 Phone Number : {phone}
+
+🏫 Department : {student['department']}
+📚 Class : {student['class']}
+🌅 Shift : {student['shift']}
+
+📖 Academic Year : {student['academic_year']}
+🎯 Student Roll : {student['roll']}
+
+💳 Payment Date : {invoice['payment_date']}
+"""
+
+                await message.answer(
+                    text,
+                    reply_markup=buttons
+                )
+
+            await message.answer(
+                f"✅ Scan Completed\n\nFound : {found}"
+            )
+
+        except Exception as e:
+
+            print(e)
+
+            await message.answer(
+                "❌ Invalid Range Format"
+            )
+
+    # ==================================================
+    # SINGLE SEARCH
+    # ==================================================
+
+    else:
+
+        student = get_student(
+            eiin,
+            text_input
+        )
+
+        if not student["valid"]:
+
+            await message.answer(
+                "❌ Student Not Found"
+            )
+
+            return
+
+        invoice = get_invoice(
+            student["internal_id"],
+            student["academic_year_id"],
+            student["token"]
+        )
+
+        if not invoice["valid"]:
+
+            await message.answer(
+                "❌ Invoice Not Found"
+            )
+
+            return
+
+        phone = invoice["phone"]
+
+        if phone.startswith("0"):
+
+            whatsapp = "88" + phone
+
+        else:
+
+            whatsapp = phone
+
+        buttons = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="WhatsApp",
+                        url=f"https://wa.me/{whatsapp}"
+                    ),
+
+                    InlineKeyboardButton(
+                        text="Telegram",
+                        url="https://t.me/new_bd_test_bot"
+                    )
+                ]
+            ]
+        )
+
+        text = f"""
+━━━━━━━━━━━━━━
+🎓 STUDENT PAYMENT INFO
+━━━━━━━━━━━━━━
+
+🧾 Invoice Number : {invoice['invoice']}
+👤 Name : {student['name']}
+🆔 Student ID : {student['student_id']}
+📞 Phone Number : {phone}
+
+🏫 Department : {student['department']}
+📚 Class : {student['class']}
+🌅 Shift : {student['shift']}
+
+📖 Academic Year : {student['academic_year']}
+🎯 Student Roll : {student['roll']}
+
+💳 Payment Date : {invoice['payment_date']}
+"""
+
+        await message.answer(
+            text,
+            reply_markup=buttons
+        )
+
+    await state.set_state(
+        PaymentState.waiting_for_student
+    )
+
+# ======================================================
+# MAIN
+# ======================================================
+
+async def main():
+
+    print("Bot Started")
+
+    threading.Thread(
+        target=run_web
+    ).start()
+
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+
+    asyncio.run(main())
