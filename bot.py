@@ -1,16 +1,28 @@
 import os
+import sys
 import logging
 import threading
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
 from PIL import Image, ImageDraw, ImageFont
 
-# --- Pillow 10+ ANTIALIAS এরর ফিক্স করার জন্য প্যাচ ---
+# --- [CRITICAL FIX] MoviePy-এর ভেতরের ANTIALIAS এরর চিরতরে দূর করার ম্যাজিক লজিক ---
+# কোডটি রান হওয়া মাত্রই গ্লোবালি এবং moviepy-এর ভেতরের মডিউলে ANTIALIAS ফিক্স করে দেবে
 if not hasattr(Image, 'ANTIALIAS'):
     Image.ANTIALIAS = Image.Resampling.LANCZOS
-# -----------------------------------------------------
+    
+# moviepy যেখানে ইমেজ প্রসেস করে, সেখানে জোরপূর্বক এটি ইমপোর্ট করিয়ে দেওয়া
+try:
+    import moviepy.video.fx.all as mv_fx
+    import moviepy.video.VideoClip as mv_clip
+    mv_clip.Image.ANTIALIAS = Image.Resampling.LANCZOS
+except Exception:
+    pass
+
+# এবার সেফলি moviepy ইমপোর্ট করা হচ্ছে
+from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
+# ---------------------------------------------------------------------------------
 
 # লগিং সেটআপ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -107,7 +119,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await status_message.edit_text("🎬 ভিডিও রেন্ডারিং হচ্ছে ভাই...")
         
-        # সার্ভার রেন্ডারিং ফাস্ট করার জন্য কনফিগারেশন
+        # ক্লাউড সার্ভার রেন্ডারিং ফাস্ট করার জন্য কনফিগারেশন
         final_video.write_videofile(
             output_path, 
             codec="libx264", 
