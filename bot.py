@@ -1,234 +1,117 @@
 import os
+import logging
 import threading
-import cv2
-
 from flask import Flask
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
+from PIL import Image, ImageDraw, ImageFont
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
+# লগিং সেটআপ
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters
-)
+# তোমার টেস্ট টোকেন
+TOKEN = "8716578947:AAG1tliMeUj78ZsYBEvi1YI8I1GhIpuV2B4"
 
-# TOKEN
-BOT_TOKEN ="8626630085:AAHh6GY6zvYWuO0p5b7GPrD8bOakVMjHzao"
+DOWNLOAD_DIR = "bot_files"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# FLASK
-web_app = Flask(__name__)
+# ----------------- FLASK SERVER PART -----------------
+# Render-এর ফ্রি ওয়েব সার্ভিসকে সচল রাখার জন্য Flask সেটআপ
+flask_app = Flask(__name__)
 
-@web_app.route("/")
+@flask_app.route('/')
 def home():
-    return "Anime Bot Running 🔥"
+    return "বট একদম লাইভ আছে ভাই! 😎", 200
 
-# STORE USER IMAGE
-user_images = {}
+def run_flask():
+    # Render নিজে থেকেই PORT অ্যাসাইন করে দেয়, না পেলে ডিফল্ট ৫০০০ এ চলবে
+    port = int(os.environ.get("PORT", 5000))
+    flask_app.run(host='0.0.0.0', port=port)
+# -----------------------------------------------------
 
-# START
+# Pillow দিয়ে হলুদ টেক্সট ব্যানার তৈরি করার ফাংশন
+def create_text_banner(width, text, font_size=32):
+    banner = Image.new("RGBA", (width, 150), (255, 255, 255, 0))
+    draw = ImageDraw.Draw(banner)
+    try:
+        font = ImageFont.load_default()
+    except:
+        font = None
+        
+    w, h = width * 0.5, 60
+    position = ((width - w) // 2, (150 - h) // 2)
+    draw.text(position, text, fill="yellow", font=font)
+    
+    banner_path = os.path.join(DOWNLOAD_DIR, "temp_banner.png")
+    banner.save(banner_path)
+    return banner_path
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text("হ্যালো ভাই! ভিডিও এডিটিং বটে স্বাগতম। 😎\n\n👉 কাজ শুরু করতে প্রথমে আপনার **ভিডিওটি** পাঠান।")
 
-    await update.message.reply_text(
-        "🔥 Send me a photo"
-    )
+async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    video_file = await update.message.video.get_file()
+    video_path = os.path.join(DOWNLOAD_DIR, f"{update.effective_user.id}_input.mp4")
+    await update.message.reply_text("⏳ ভিডিওটি ডাউনলোড হচ্ছে, দয়া করে একটু অপেক্ষা করুন...")
+    await video_file.download_to_drive(video_path)
+    context.user_data['video_path'] = video_path
+    await update.message.reply_text("✅ video পেয়েছি ভাই! এবার আপনার **ছবিটি** পাঠান।")
 
-# PHOTO RECEIVE
-async def photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    photo_file = await update.message.photo[-1].get_file()
-
-    file_path = f"{update.message.chat_id}.jpg"
-
-    await photo_file.download_to_drive(file_path)
-
-    user_images[update.message.chat_id] = file_path
-
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                "🎨 Cartoon",
-                callback_data="cartoon"
-            ),
-
-            InlineKeyboardButton(
-                "🌸 Anime",
-                callback_data="anime"
-            )
-        ],
-
-        [
-            InlineKeyboardButton(
-                "🏯 Ghibli",
-                callback_data="ghibli"
-            ),
-
-            InlineKeyboardButton(
-                "✏ Sketch",
-                callback_data="sketch"
-            )
-        ]
-    ]
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        "Choose Style 👇",
-        reply_markup=reply_markup
-    )
-
-# BUTTON CLICK
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    query = update.callback_query
-
-    await query.answer()
-
-    style = query.data
-
-    chat_id = query.message.chat_id
-
-    input_path = user_images.get(chat_id)
-
-    if not input_path:
-
-        await query.message.reply_text(
-            "❌ No image found"
-        )
-
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if 'video_path' not in context.user_data:
+        await update.message.reply_text("⚠️ ভাই, আগে ভিডিও পাঠান, তারপর ছবি দিবেন।")
         return
 
+    status_message = await update.message.reply_text("⏳ ছবি পাওয়া গেছে। প্রসেসিং শুরু হচ্ছে ভাই...")
+    photo_file = await update.message.photo[-1].get_file()
+    photo_path = os.path.join(DOWNLOAD_DIR, f"{update.effective_user.id}_user_photo.png")
+    await photo_file.download_to_drive(photo_path)
+    
+    video_path = context.user_data['video_path']
+    output_path = os.path.join(DOWNLOAD_DIR, f"{update.effective_user.id}_output.mp4")
+
     try:
+        video = VideoFileClip(video_path)
+        user_image = (ImageClip(photo_path).set_duration(video.duration).resize(width=video.w * 0.35).set_position(("center", int(video.h * 0.18))))
 
-        img = cv2.imread(input_path)
+        text_str = "নিঊ কালেকশন 👻👀\n🥵 লিংক কমেন্টে ✅"
+        generated_banner_path = create_text_banner(video.w, text_str, font_size=int(video.w * 0.045))
+        banner_image = (ImageClip(generated_banner_path).set_duration(video.duration).set_position(("center", int(video.h * 0.75))))
 
-        if img is None:
+        final_video = CompositeVideoClip([video, user_image, banner_image])
+        await status_message.edit_text("🎬 ভিডিও রেন্ডারিং হচ্ছে...")
+        
+        final_video.write_videofile(output_path, codec="libx264", audio_codec="aac", preset="ultrafast", threads=4)
+        video.close()
+        final_video.close()
 
-            await query.message.reply_text(
-                "❌ Failed to load image"
-            )
-
-            return
-
-        output_path = f"output_{chat_id}.jpg"
-
-        # CARTOON
-        if style == "cartoon":
-
-            gray = cv2.cvtColor(
-                img,
-                cv2.COLOR_BGR2GRAY
-            )
-
-            gray = cv2.medianBlur(gray, 5)
-
-            edges = cv2.adaptiveThreshold(
-                gray,
-                255,
-                cv2.ADAPTIVE_THRESH_MEAN_C,
-                cv2.THRESH_BINARY,
-                9,
-                9
-            )
-
-            color = cv2.bilateralFilter(
-                img,
-                9,
-                250,
-                250
-            )
-
-            result = cv2.bitwise_and(
-                color,
-                color,
-                mask=edges
-            )
-
-        # ANIME
-        elif style == "anime":
-
-            result = cv2.stylization(
-                img,
-                sigma_s=60,
-                sigma_r=0.45
-            )
-
-        # GHIBLI
-        elif style == "ghibli":
-
-            result = cv2.detailEnhance(
-                img,
-                sigma_s=12,
-                sigma_r=0.15
-            )
-
-        # SKETCH
-        elif style == "sketch":
-
-            gray, result = cv2.pencilSketch(
-                img,
-                sigma_s=60,
-                sigma_r=0.07,
-                shade_factor=0.05
-            )
-
-        else:
-
-            result = img
-
-        cv2.imwrite(output_path, result)
-
-        await query.message.reply_photo(
-            photo=open(output_path, "rb"),
-            caption=f"✅ {style.upper()} Done"
-        )
-
+        await status_message.edit_text("🚀 আপলোড হচ্ছে...")
+        await update.message.reply_video(video=open(output_path, 'rb'), caption="ভাই, আপনার এডিটেড ভিডিও রেডি! 😎")
+        
+        os.remove(video_path)
+        os.remove(output_path)
+        os.remove(photo_path)
+        if os.path.exists(generated_banner_path): os.remove(generated_banner_path)
+        context.user_data.clear()
+        await status_message.delete()
     except Exception as e:
+        logging.error(f"Error: {e}")
+        await status_message.edit_text(f"❌ এরর হয়েছে ভাই: {str(e)[:50]}")
 
-        await query.message.reply_text(
-            f"❌ Error:\n{e}"
-        )
+def main():
+    # ১. আলাদা ব্যাকগ্রাউন্ড থ্রেডে Flask সার্ভার চালু করা (যাতে Render পোর্ট ডিটেক্ট করতে পারে)
+    threading.Thread(target=run_flask, daemon=True).start()
 
-# TELEGRAM BOT
-telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    # ২. টেলিগ্রাম বট স্টার্ট করা
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.VIDEO, handle_video))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    
+    print("বট সফলভাবে চালু হয়েছে ভাই...")
+    app.run_polling()
 
-telegram_app.add_handler(
-    CommandHandler("start", start)
-)
-
-telegram_app.add_handler(
-    MessageHandler(filters.PHOTO, photo)
-)
-
-telegram_app.add_handler(
-    CallbackQueryHandler(button)
-)
-
-# RUN BOT
-def run_bot():
-
-    print("🔥 Telegram Bot Started")
-
-    telegram_app.run_polling()
-
-# MAIN
-if __name__ == "__main__":
-
-    threading.Thread(
-        target=run_bot
-    ).start()
-
-    port = int(
-        os.environ.get("PORT", 10000)
-    )
-
-    web_app.run(
-        host="0.0.0.0",
-        port=port
-    )
+if __name__ == '__main__':
+    main()
