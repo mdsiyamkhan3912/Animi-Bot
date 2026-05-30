@@ -1,6 +1,4 @@
-python-telegram-bot==20.7
-opencv-python-headless
-numpy
-pillow
-flask
-gunicorn
+python-telegram-bot==20.8
+moviepy==1.0.3
+pillow==10.2.0
+flask==3.0.2
