@@ -6,7 +6,7 @@ import requests
 import urllib3
 from threading import Thread
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin, quote, unquote
 from pypdf import PdfReader
 from flask import Flask
 import telebot
@@ -19,7 +19,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "BBGGC Scanner is Online!"
+    return "BBGGC Combined Final Bot is Online!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
@@ -36,7 +36,7 @@ active_tasks = {}     # chat_id -> True/False
 user_context = {}     # Sonali রেঞ্জ ট্র্যাকিং
 
 # =======================================================
-#               ১ম কোড: 1️⃣ Sonali Result (BBGGC)
+#               ১ম অংশ: 1️⃣ Sonali Result (BBGGC)
 # =======================================================
 
 headers_sonali = {
@@ -191,7 +191,7 @@ def run_sonali_search(chat_id, s_r, e_r):
 
 
 # =======================================================
-#               ২য় কোড: 2️⃣ eShiksha Result (BBGGC)
+#          ২য় অংশ: 2️⃣ eShiksha Result (অটো চেইন)
 # =======================================================
 
 BASE_URL = "https://bbggc.eshiksaems.com"
@@ -201,7 +201,7 @@ DATA_URL = f"{BASE_URL}/controller_student_module.php"
 def get_session():
     session = requests.Session()
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0 Mobile Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
         'Referer': f"{BASE_URL}/Result-Enquiry-Center",
         'X-Requested-With': 'XMLHttpRequest'
     })
@@ -216,177 +216,291 @@ def get_session():
         pass
     return session
 
-def fetch_slip_details(session, roll, student_name):
-    slip_info = {
-        "father": "N/A",
-        "mother": "N/A",
-        "phone": "N/A",
-        "adm_roll": "N/A",
-        "reg_no": "N/A"
-    }
+def extract_adm_roll_photo_and_session(session, class_roll):
+    adm_roll = None
+    photo_bytes = None
+    session_id = "22"  # ডিফল্ট সেশন আইডি
+
     try:
-        tx_res = session.post(
-            DATA_URL,
-            data={'rootData': str(roll).strip(), 'flagreq': 'transactionCheck'},
-            timeout=12
-        )
-        if tx_res.status_code != 200:
-            return slip_info
+        payload = {
+            'rootData': str(class_roll).strip(),
+            'flagreq': 'transactionCheck'
+        }
+        tx_res = session.post(DATA_URL, data=payload, timeout=12)
+        
+        if tx_res.status_code == 200:
+            # পেজ থেকে সম্ভাব্য sessionID বা select অপশন চেক করা
+            soup_tx = BeautifulSoup(tx_res.text, 'html.parser')
+            sess_select = soup_tx.find('select', {'id': 'sessionID'}) or soup_tx.find('select', {'name': 'sessionID'})
+            if sess_select:
+                opt = sess_select.find('option', selected=True) or sess_select.find('option')
+                if opt and opt.has_attr('value'):
+                    session_id = opt['value'].strip()
 
-        soup = BeautifulSoup(tx_res.text, 'html.parser')
-        target_receipt_id = None
-
-        clean_target_name = re.sub(r'[^a-zA-Z]', '', student_name).lower()
-        rows = soup.find_all('tr')
-
-        for row in rows:
-            row_text = row.get_text()
-            clean_row_text = re.sub(r'[^a-zA-Z]', '', row_text).lower()
-            if clean_target_name and (clean_target_name in clean_row_text or any(part in clean_row_text for part in clean_target_name.split() if len(part) > 3)):
-                btn_match = re.search(r"printReceipts\s*\(\s*['\"]?(\d+)['\"]?\s*\)", str(row))
-                if btn_match:
-                    target_receipt_id = btn_match.group(1)
-                    break
-
-        if not target_receipt_id:
             all_btns = re.findall(r"printReceipts\s*\(\s*['\"]?(\d+)['\"]?\s*\)", tx_res.text)
             if all_btns:
                 target_receipt_id = all_btns[-1]
+                enc_res = session.post(
+                    DATA_URL,
+                    data={'rootData': target_receipt_id, 'flagreq': 'ajaxEncryption'},
+                    timeout=10
+                )
+                if enc_res.status_code == 200:
+                    xx_code = enc_res.text.strip().strip('"\'')
+                    pdf_url = f"{BASE_URL}/std_coll_slip.php?xxCode={quote(xx_code)}"
+                    pdf_res = session.get(pdf_url, timeout=15)
 
-        if not target_receipt_id:
-            return slip_info
+                    if pdf_res.status_code == 200 and len(pdf_res.content) > 500:
+                        reader = PdfReader(io.BytesIO(pdf_res.content))
+                        slip_text = ""
+                        for page in reader.pages:
+                            slip_text += (page.extract_text() or "") + "\n"
 
-        enc_res = session.post(
-            DATA_URL,
-            data={'rootData': target_receipt_id, 'flagreq': 'ajaxEncryption'},
-            timeout=12
-        )
-        if enc_res.status_code != 200:
-            return slip_info
+                        adm_m = re.search(r"Admission\s*Roll\s*:\s*(\d{5,8})", slip_text, re.I)
+                        if adm_m:
+                            adm_roll = adm_m.group(1).strip()
 
-        xx_code = enc_res.text.strip().strip('"\'')
-
-        pdf_url = f"{BASE_URL}/std_coll_slip.php?xxCode={quote(xx_code)}"
-        pdf_res = session.get(pdf_url, timeout=15)
-
-        if pdf_res.status_code == 200 and len(pdf_res.content) > 500:
-            reader = PdfReader(io.BytesIO(pdf_res.content))
-            full_pdf_text = ""
-            for page in reader.pages:
-                full_pdf_text += (page.extract_text() or "") + "\n"
-
-            f_m = re.search(r"Father'?s\s*Name\s*:\s*([^\n\r]+?)(?=\s{2,}|Class\s*Roll|\n|$)", full_pdf_text, re.I)
-            m_m = re.search(r"Mother'?s\s*Name\s*:\s*([^\n\r]+?)(?=\s{2,}|Student\s*Phone|SSC|\n|$)", full_pdf_text, re.I)
-            p_m = re.search(r"Student\s*Phone\s*:\s*([0-9\s\-]{10,14})", full_pdf_text, re.I)
-            adm_m = re.search(r"Admission\s*Roll\s*:\s*(\d+)", full_pdf_text, re.I)
-            reg_m = re.search(r"(?:SSC/HSC\s*Reg|Reg)\.?\s*No\.?\s*:\s*(\d+)", full_pdf_text, re.I)
-
-            if f_m: slip_info["father"] = f_m.group(1).strip()
-            if m_m: slip_info["mother"] = m_m.group(1).strip()
+        p_res = session.post(DATA_URL, data={'rootData': str(class_roll).strip(), 'flagreq': 'profileRollCheck'}, timeout=10)
+        if p_res.status_code == 200:
+            soup = BeautifulSoup(p_res.text, 'html.parser')
+            for img in soup.find_all('img'):
+                src = img.get('src', '')
+                if 'image/student' in src:
+                    ir = session.get(f"{BASE_URL}/{src.lstrip('/')}", timeout=10)
+                    if ir.status_code == 200:
+                        photo_bytes = ir.content
+                    break
             
-            if p_m:
-                raw_phone = re.sub(r"\D", "", p_m.group(1))
-                if len(raw_phone) == 10 and raw_phone.startswith("1"):
-                    raw_phone = "0" + raw_phone
-                slip_info["phone"] = raw_phone
-
-            if adm_m: slip_info["adm_roll"] = adm_m.group(1).strip()
-            if reg_m: slip_info["reg_no"] = reg_m.group(1).strip()
+            if not adm_roll:
+                p_rolls = re.findall(r"\b2\d{5}\b", p_res.text)
+                if p_rolls:
+                    adm_roll = p_rolls[0]
 
     except Exception:
         pass
 
-    return slip_info
+    return adm_roll, photo_bytes, session_id
 
-def fetch_single(session, roll):
-    try:
-        data_payload = {'rootData': str(roll).strip(), 'flagreq': 'profileRollCheck'}
-        res = session.post(DATA_URL, data=data_payload, timeout=12)
-        if res.status_code != 200 or "Student Info" not in res.text:
-            return None, None
+def fetch_admission_form_by_adm_roll(session, adm_roll, session_id="22"):
+    # বিভিন্ন সেশন আইডি টেস্ট করার লিস্ট (যাতে যেকোনো ব্যাচের শিক্ষার্থী ফেচ করতে পারে)
+    possible_sessions = [str(session_id), "22", "21", "20", "19", "18", "23", "24"]
+    
+    for sid in possible_sessions:
+        try:
+            tx_payload = {
+                'rootData': str(adm_roll).strip(),
+                'sessionID': str(sid),
+                'flagreq': 'checkTransaction'
+            }
+            res_tx = session.post(DATA_URL, data=tx_payload, timeout=12)
+            if res_tx.status_code != 200 or not res_tx.text.strip():
+                continue
 
-        soup = BeautifulSoup(res.text, 'html.parser')
+            raw_query = res_tx.text.strip().strip('"\'')
+            if len(raw_query) < 10 or "<html" in raw_query.lower():
+                continue
 
-        img_url = None
-        for img in soup.find_all('img'):
-            src = img.get('src', '')
-            if 'image/student' in src:
-                img_url = urljoin(BASE_URL, src)
-                break
+            if "xxCode=" in raw_query:
+                pdf_url = f"{BASE_URL}/Student-Admission?{raw_query}"
+            else:
+                pdf_url = f"{BASE_URL}/Student-Admission?xxCode={raw_query}"
+                if "yyCode" not in pdf_url:
+                    pdf_url += "&yyCode=1"
 
-        full_text = soup.get_text()
-        name_m = re.search(r"Name\s*:\s*(.*?)(?=\n|Department)", full_text)
-        dept_m = re.search(r"Department\s*:\s*(.*?)(?=\n|Session)", full_text)
-        sess_m = re.search(r"Session\s*:\s*(.*?)(?=\n|Academic)", full_text)
-        year_m = re.search(r"Academic\s*Year\s*:\s*(\d+)", full_text)
+            pdf_headers = {
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+                'Referer': f"{BASE_URL}/Result-Enquiry-Center",
+                'Accept': 'application/pdf,text/html,*/*'
+            }
 
-        student_name = name_m.group(1).strip() if name_m else "N/A"
-        slip = fetch_slip_details(session, roll, student_name)
+            pdf_res = session.get(pdf_url, headers=pdf_headers, timeout=20)
+            if pdf_res.status_code != 200 or len(pdf_res.content) < 500:
+                continue
 
-        data = {
-            "roll": roll,
-            "name": student_name,
-            "dept": dept_m.group(1).strip() if dept_m else "N/A",
-            "session": sess_m.group(1).strip() if sess_m else "N/A",
-            "year": year_m.group(1).strip() if year_m else "N/A",
-            "father": slip["father"],
-            "mother": slip["mother"],
-            "phone": slip["phone"],
-            "adm_roll": slip["adm_roll"],
-            "reg_no": slip["reg_no"]
-        }
+            pdf_bytes = pdf_res.content
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            full_text = ""
+            for page in reader.pages:
+                full_text += (page.extract_text() or "") + "\n"
 
-        photo_bytes = None
-        if img_url:
-            img_res = session.get(img_url, timeout=12)
-            if img_res.status_code == 200:
-                photo_bytes = img_res.content
+            def get_match(pat, def_val=""):
+                m = re.search(pat, full_text, re.I | re.M)
+                return m.group(1).strip() if m else def_val
 
-        return data, photo_bytes
-    except Exception:
-        return None, None
+            def extract_bd_phone(section_pattern):
+                sec = re.search(section_pattern, full_text, re.I | re.M)
+                if sec:
+                    num_match = re.search(r"(?:88)?(01[3-9]\d{8})", sec.group(1))
+                    if num_match:
+                        return num_match.group(1)
+                return ""
+
+            student_phone = extract_bd_phone(r"Student'?s\s*Phone\s*:\s*([^\n\r]+)")
+            father_phone = extract_bd_phone(r"Father'?s/Guardian'?s\s*Phone\s*:\s*([^\n\r]+)")
+            mother_phone = extract_bd_phone(r"Mother'?s\s*Phone\s*:\s*([^\n\r]+)")
+
+            dob = get_match(r"Date\s*of\s*Birth\s*:\s*([0-9]{1,2}-[A-Za-z]{3}-[0-9]{4})")
+            if not dob:
+                dob = get_match(r"Date\s*of\s*Birth\s*:\s*([^\n\r]+?)(?=\s*\d{1,2}\.|\s*Quota|$)")
+
+            rel = get_match(r"Religion\s*:\s*([A-Za-z]+)")
+
+            email_match = re.search(r"Student'?s\s*E-?mail\s*:\s*([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", full_text, re.I)
+            student_email = email_match.group(1).strip() if email_match else ""
+
+            s_name = get_match(r"Student\s*Name\s*\(English\)\s*:\s*([A-Za-z\s\.]+?)(?=\(বাংলায়\)|\n|$)")
+            f_name = get_match(r"Father'?s\s*Name\s*:\s*([A-Za-z\s\.]+?)(?=\(বাংলায়\)|\n|$)")
+            m_name = get_match(r"Mother'?s\s*Name\s*:\s*([A-Za-z\s\.]+?)(?=\(বাংলায়\)|\n|$)")
+
+            if not s_name:
+                continue
+
+            gender = get_match(r"Gender\s*:\s*([A-Za-z]+)") or "Female"
+            blood = get_match(r"Blood\s*Group\s*:\s*([A-Za-z+-]+)")
+
+            data = {
+                "class_roll": get_match(r"Class\s*Roll\s*:\s*(\d+)"),
+                "adm_roll": str(adm_roll),
+                "reg_no": get_match(r"Reg\s*No[\s\S]*?(\d{8,15})"),
+                "student_name": s_name,
+                "student_nid": get_match(r"Student'?s\s*NID/Birth\s*Reg\.?\s*:\s*([0-9]+)"),
+                "gender": gender,
+                "student_phone": student_phone,
+                "dob": dob,
+                "religion": rel,
+                "blood": blood,
+                "student_email": student_email,
+                "father_name": f_name,
+                "father_nid": get_match(r"Father'?s/Guardian'?s\s*NID\s*:\s*([0-9]+)"),
+                "father_phone": father_phone,
+                "mother_name": m_name,
+                "mother_nid": get_match(r"Mother'?s\s*NID\s*:\s*([0-9]+)"),
+                "mother_phone": mother_phone,
+                "permanent_address": get_match(r"Permanent\s*Address\s*:\s*([^\n\r]+?)(?=\n|Present|$)"),
+                "present_address": get_match(r"Present\s*Address\s*:\s*([^\n\r]+?)(?=\n|Permanent|$)"),
+                "dept": get_match(r"Group\s*:\s*([^\n\r]+?)(?=\n|Session)"),
+                "board": get_match(r"Board/Instit\.?[\s\S]*?([A-Za-z]+)\s+\d\.\d{2}"),
+                "gpa": get_match(r"(\d\.\d{2})\s*$"),
+                "session": get_match(r"Session\s*:\s*([^\n\r]+?)(?=\n|$)", def_val="2026-2027"),
+                "year": "1"
+            }
+
+            return pdf_bytes, data
+        except Exception:
+            continue
+
+    return None, None
 
 def format_caption(data):
     return (
-        f"🏛️ *বেগম বদরুন্নেসা সরকারি মহিলা কলেজ*\n"
+        f"🏛️ বেগম বদরুন্নেসা সরকারি মহিলা কলেজ\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"👤 *নাম :* {data['name']}\n"
-        f"🔢 *Class Roll :* `{data['roll']}`\n"
-        f"🎫 *Adm Roll :* `{data['adm_roll']}`\n"
-        f"📝 *Reg No :* `{data['reg_no']}`\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"👨‍🦱 *পিতার নাম :* {data['father']}\n"
-        f"👩‍🦰 *মাতার নাম :* {data['mother']}\n"
-        f"📞 *মোবাইল :* `{data['phone']}`\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🏫 *বিভাগ :* {data['dept']}\n"
-        f"📆 *সেশন :* {data['session']}\n"
-        f"📚 *শিক্ষাবর্ষ :* {data['year']}\n"
-        f"━━━━━━━━━━━━━━━━━━"
+        f"🔢 Class Roll : {data['class_roll']}\n"
+        f"🎫 Adm Roll : {data['adm_roll']}\n"
+        f"📝 Reg No : {data['reg_no']}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👤 Student Name : {data['student_name']}\n"
+        f"🆔 Student's NID/Birth Reg. : {data['student_nid']}\n"
+        f"⚥ Gender : {data['gender']}\n"
+        f"📞 Student's Phone : {data['student_phone']}\n"
+        f"🎂 Date of Birth : {data['dob']}\n"
+        f"☪️ Religion : {data['religion']}\n"
+        f"🩸 Blood Group : {data['blood']}\n"
+        f"📧 Student's E-mail : {data['student_email']}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👨‍🦱 Father's Name : {data['father_name']}\n"
+        f"🪪 Father's/Guardian's NID : {data['father_nid']}\n"
+        f"☎️ Father's/Guardian's Phone : {data['father_phone']}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👩‍🦰 Mother's Name : {data['mother_name']}\n"
+        f"🪪 Mother's NID : {data['mother_nid']}\n"
+        f"☎️ Mother's Phone : {data['mother_phone']}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🏠 Permanent Address : {data['permanent_address']}\n"
+        f"🏠 Present Address : {data['present_address']}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"🏫 Department: {data['dept']}\n"
+        f"🏢 Board: {data['board']}\n"
+        f"🎰 GPA: {data['gpa']}\n"
+        f"📆 Session: {data['session']} |\n"
+        f"📚 Year: {data['year']}"
     )
 
-def create_action_keyboard(phone, next_start=None, next_end=None):
+def create_multi_phone_keyboard(std_phone, fat_phone, mot_phone, next_start=None, next_end=None):
     markup = InlineKeyboardMarkup()
-    buttons = []
-
-    if phone and phone != "N/A" and len(phone) >= 10:
-        clean_num = phone[-11:]
-        if len(clean_num) == 10:
-            clean_num = "0" + clean_num
-            
-        wa_url = f"https://wa.me/88{clean_num}"
-        tg_url = f"https://t.me/+88{clean_num}"
-
-        buttons.append(InlineKeyboardButton("🟢 WhatsApp ↗", url=wa_url))
-        buttons.append(InlineKeyboardButton("🔵 Telegram ↗", url=tg_url))
-        markup.row(*buttons)
-
+    if std_phone:
+        markup.row(
+            InlineKeyboardButton("🟢 Std WA", url=f"https://wa.me/88{std_phone}"),
+            InlineKeyboardButton("🔵 Std TG", url=f"https://t.me/+88{std_phone}")
+        )
+    if fat_phone:
+        markup.row(
+            InlineKeyboardButton("🟢 Fat WA", url=f"https://wa.me/88{fat_phone}"),
+            InlineKeyboardButton("🔵 Fat TG", url=f"https://t.me/+88{fat_phone}")
+        )
+    if mot_phone:
+        markup.row(
+            InlineKeyboardButton("🟢 Mot WA", url=f"https://wa.me/88{mot_phone}"),
+            InlineKeyboardButton("🔵 Mot TG", url=f"https://t.me/+88{mot_phone}")
+        )
+    
     if next_start and next_end:
         markup.add(InlineKeyboardButton("➡️ Next 500", callback_data=f"eshiksha_next_{next_start}_{next_end}"))
 
-    return markup
+    return markup if len(markup.keyboard) > 0 else None
 
-def run_range_search(chat_id, start_roll, end_roll):
+def process_full_student(chat_id, user_input, next_start=None, next_end=None):
+    session = get_session()
+    photo_bytes = None
+    target_adm_roll = None
+    extracted_session_id = "22"
+
+    if len(str(user_input)) == 6:
+        target_adm_roll = str(user_input)
+    else:
+        adm_roll, photo, sess_id = extract_adm_roll_photo_and_session(session, user_input)
+        target_adm_roll = adm_roll
+        photo_bytes = photo
+        if sess_id:
+            extracted_session_id = sess_id
+
+    if not target_adm_roll:
+        bot.send_message(chat_id, f"❌ রোল `{user_input}`-এর কোনো পেমেন্ট রিসিট বা এডমিশন রোল পাওয়া যায়নি!", parse_mode='Markdown')
+        return
+
+    pdf_bytes, data = fetch_admission_form_by_adm_roll(session, target_adm_roll, extracted_session_id)
+
+    if not data or not pdf_bytes:
+        bot.send_message(chat_id, f"❌ এডমিশন রোল `{target_adm_roll}`-এর মূল আবেদন ফর্ম পাওয়া যায়নি!", parse_mode='Markdown')
+        return
+
+    if not data["class_roll"] or data["class_roll"] == "N/A":
+        data["class_roll"] = str(user_input)
+
+    caption = format_caption(data)
+    action_markup = create_multi_phone_keyboard(
+        data['student_phone'],
+        data['father_phone'],
+        data['mother_phone'],
+        next_start=next_start,
+        next_end=next_end
+    )
+
+    pdf_file = io.BytesIO(pdf_bytes)
+    pdf_file.name = f"Admission_Form_{data['adm_roll']}.pdf"
+    doc_caption = f"📄 *মূল আবেদন ফর্ম (Admission Form)*\n🎫 Adm Roll: `{data['adm_roll']}`\n🔢 Class Roll: `{user_input if len(str(user_input)) > 6 else data['class_roll']}`"
+    bot.send_document(chat_id, pdf_file, caption=doc_caption, parse_mode='Markdown')
+
+    if photo_bytes:
+        try:
+            bot.send_photo(chat_id, photo_bytes, caption=caption, parse_mode='Markdown', reply_markup=action_markup)
+            return
+        except Exception:
+            pass
+
+    bot.send_message(chat_id, caption, parse_mode='Markdown', reply_markup=action_markup)
+
+def run_eshiksha_range_search(chat_id, start_roll, end_roll):
     total_to_search = end_roll - start_roll + 1
     active_tasks[chat_id] = True
 
@@ -396,8 +510,6 @@ def run_range_search(chat_id, start_roll, end_roll):
     stop_markup.add(InlineKeyboardButton("🔴 Stop Search", callback_data="stop_search"))
 
     status_msg = bot.send_message(chat_id, "⏳ সার্চ শুরু হচ্ছে...", reply_markup=stop_markup)
-
-    session = get_session()
     found_count = 0
 
     for idx, r in enumerate(range(start_roll, end_roll + 1), start=1):
@@ -405,19 +517,40 @@ def run_range_search(chat_id, start_roll, end_roll):
             bot.send_message(chat_id, "🛑 সার্চ থামানো হয়েছে!")
             break
 
-        data, photo = fetch_single(session, r)
+        try:
+            session = get_session()
+            adm_roll, photo_bytes, sess_id = extract_adm_roll_photo_and_session(session, r)
+            target_adm = adm_roll if adm_roll else (str(r) if len(str(r)) == 6 else None)
 
-        if data and data['name'] != "N/A":
-            found_count += 1
-            caption = format_caption(data)
-            action_markup = create_action_keyboard(data['phone'])
-            try:
-                if photo:
-                    bot.send_photo(chat_id, photo, caption=caption, parse_mode='Markdown', reply_markup=action_markup)
-                else:
+            if target_adm:
+                pdf_bytes, data = fetch_admission_form_by_adm_roll(session, target_adm, sess_id)
+                if data:
+                    found_count += 1
+                    if not data["class_roll"] or data["class_roll"] == "N/A":
+                        data["class_roll"] = str(r)
+
+                    caption = format_caption(data)
+                    action_markup = create_multi_phone_keyboard(
+                        data['student_phone'],
+                        data['father_phone'],
+                        data['mother_phone']
+                    )
+
+                    if pdf_bytes:
+                        pdf_file = io.BytesIO(pdf_bytes)
+                        pdf_file.name = f"Admission_Form_{data['adm_roll']}.pdf"
+                        bot.send_document(chat_id, pdf_file, caption=f"📄 Admission Form: `{data['adm_roll']}`", parse_mode='Markdown')
+
+                    if photo_bytes:
+                        try:
+                            bot.send_photo(chat_id, photo_bytes, caption=caption, parse_mode='Markdown', reply_markup=action_markup)
+                            continue
+                        except Exception:
+                            pass
+
                     bot.send_message(chat_id, caption, parse_mode='Markdown', reply_markup=action_markup)
-            except Exception:
-                pass
+        except Exception:
+            pass
 
         status_text = (
             f"⌛ Processing...\n"
@@ -434,17 +567,10 @@ def run_range_search(chat_id, start_roll, end_roll):
 
     try:
         bot.delete_message(chat_id, status_msg.message_id)
-    except Exception:
+    except:
         pass
 
-    bot.send_message(chat_id, f"✅ সার্চ সম্পন্ন হয়েছে!\n📊 মোট পাওয়া গেছে: {found_count}")
-
-    next_start = end_roll + 1
-    next_end = next_start + 499
-    next_markup = InlineKeyboardMarkup()
-    next_markup.add(InlineKeyboardButton("➡️ Next 500", callback_data=f"eshiksha_next_{next_start}_{next_end}"))
-
-    bot.send_message(chat_id, "👉 পরবর্তী ব্যাচ খুঁজতে চান?", reply_markup=next_markup)
+    bot.send_message(chat_id, f"✅ সার্চ সম্পন্ন হয়েছে!\n📊 মোট তথ্য পাওয়া গেছে: {found_count}")
     active_tasks[chat_id] = False
 
 
@@ -484,9 +610,10 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, "2️⃣ eShiksha Result সিলেক্ট করা হয়েছে!")
         bot.send_message(
             chat_id,
-            "স্বাগতম!\n\n"
-            "• রোল নম্বর দিন (যেমন: `233115`)\n"
-            "• অথবা রেঞ্জ দিন (যেমন: `233115-233200`)",
+            "স্বাগতম (বেগম বদরুন্নেসা কলেজ এডমিশন ও ফরম বট)!\n\n"
+            "• ১৩ সংখ্যার **ক্লাস রোল** পাঠান (যেমন: `1202526033005`)\n"
+            "• অথবা সরাসরি **এডমিশন রোল** পাঠান (যেমন: `547059`)\n"
+            "• অথবা রেঞ্জ পাঠান",
             parse_mode='Markdown'
         )
 
@@ -509,7 +636,7 @@ def handle_callbacks(call):
         s_roll = int(parts[2])
         e_roll = int(parts[3])
         bot.answer_callback_query(call.id)
-        run_range_search(chat_id, s_roll, e_roll)
+        run_eshiksha_range_search(chat_id, s_roll, e_roll)
 
 @bot.message_handler(func=lambda msg: True)
 def handle_message(message):
@@ -521,7 +648,7 @@ def handle_message(message):
         bot.reply_to(message, "অনুগ্রহ করে প্রথমে একটি অপশন সিলেক্ট করুন:", reply_markup=main_menu())
         return
 
-    # ১️⃣ Sonali Result এক্সিকিউশন
+    # ১️⃣ Sonali Result
     if mode == "sonali":
         try:
             if "-" in text:
@@ -532,7 +659,7 @@ def handle_message(message):
         except:
             pass
 
-    # 2️⃣ eShiksha Result এক্সিকিউশন
+    # 2️⃣ eShiksha Result
     elif mode == "eshiksha":
         if "-" in text:
             parts = text.split("-")
@@ -545,31 +672,18 @@ def handle_message(message):
                 if (e - s + 1) > 500:
                     bot.reply_to(message, "⚠️ একসাথে সর্বোচ্চ ৫০০ রেঞ্জ দিতে পারবেন।")
                     return
-                run_range_search(chat_id, s, e)
+                run_eshiksha_range_search(chat_id, s, e)
                 return
 
         if text.isdigit():
             roll = int(text)
-            wait_msg = bot.reply_to(message, f"রোল {roll}-এর বিস্তারিত তথ্য খোঁজা হচ্ছে...")
-            session = get_session()
-            data, photo = fetch_single(session, roll)
+            wait_msg = bot.reply_to(message, f"🔍 রোল `{roll}`-এর পিডিএফ, তথ্য ও ছবি খোঁজা হচ্ছে...", parse_mode='Markdown')
+            process_full_student(chat_id, roll, next_start=roll+1, next_end=roll+500)
 
             try:
                 bot.delete_message(chat_id, wait_msg.message_id)
             except Exception:
                 pass
-
-            if not data or data['name'] == "N/A":
-                bot.reply_to(message, "❌ কোনো তথ্য পাওয়া যায়নি।")
-                return
-
-            caption = format_caption(data)
-            action_markup = create_action_keyboard(data['phone'], next_start=roll+1, next_end=roll+500)
-
-            if photo:
-                bot.send_photo(chat_id, photo, caption=caption, parse_mode='Markdown', reply_markup=action_markup)
-            else:
-                bot.send_message(chat_id, caption, parse_mode='Markdown', reply_markup=action_markup)
             return
 
         bot.reply_to(message, "অনুগ্রহ করে সঠিক রোল নম্বর অথবা রেঞ্জ পাঠান।")
