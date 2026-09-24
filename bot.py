@@ -229,7 +229,6 @@ def extract_adm_roll_photo_and_session(session, class_roll):
         tx_res = session.post(DATA_URL, data=payload, timeout=12)
         
         if tx_res.status_code == 200:
-            # পেজ থেকে সম্ভাব্য sessionID বা select অপশন চেক করা
             soup_tx = BeautifulSoup(tx_res.text, 'html.parser')
             sess_select = soup_tx.find('select', {'id': 'sessionID'}) or soup_tx.find('select', {'name': 'sessionID'})
             if sess_select:
@@ -282,7 +281,6 @@ def extract_adm_roll_photo_and_session(session, class_roll):
     return adm_roll, photo_bytes, session_id
 
 def fetch_admission_form_by_adm_roll(session, adm_roll, session_id="22"):
-    # বিভিন্ন সেশন আইডি টেস্ট করার লিস্ট (যাতে যেকোনো ব্যাচের শিক্ষার্থী ফেচ করতে পারে)
     possible_sessions = [str(session_id), "22", "21", "20", "19", "18", "23", "24"]
     
     for sid in possible_sessions:
@@ -395,35 +393,34 @@ def format_caption(data):
     return (
         f"🏛️ বেগম বদরুন্নেসা সরকারি মহিলা কলেজ\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"🔢 Class Roll : {data['class_roll']}\n"
-        f"🎫 Adm Roll : {data['adm_roll']}\n"
-        f"📝 Reg No : {data['reg_no']}\n"
+        f"🔢 Class Roll : `{data['class_roll']}`\n"
+        f"🎫 Adm Roll : `{data['adm_roll']}`\n"
+        f"📝 Reg No : `{data['reg_no']}`\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"👤 Student Name : {data['student_name']}\n"
-        f"🆔 Student's NID/Birth Reg. : {data['student_nid']}\n"
+        f"👤 Name : {data['student_name']}\n"
+        f"🆔 Student NID : `{data['student_nid']}`\n"
         f"⚥ Gender : {data['gender']}\n"
-        f"📞 Student's Phone : {data['student_phone']}\n"
-        f"🎂 Date of Birth : {data['dob']}\n"
+        f"📞 Std Phone : `{data['student_phone']}`\n"
+        f"🎂 DOB : `{data['dob']}`\n"
         f"☪️ Religion : {data['religion']}\n"
-        f"🩸 Blood Group : {data['blood']}\n"
-        f"📧 Student's E-mail : {data['student_email']}\n"
+        f"🩸 Blood : {data['blood']}\n"
+        f"📧 Email : {data['student_email']}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"👨‍🦱 Father's Name : {data['father_name']}\n"
-        f"🪪 Father's/Guardian's NID : {data['father_nid']}\n"
-        f"☎️ Father's/Guardian's Phone : {data['father_phone']}\n"
+        f"👨‍🦱 Father : {data['father_name']}\n"
+        f"🪪 Father NID : `{data['father_nid']}`\n"
+        f"☎️ Father Phone : `{data['father_phone']}`\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"👩‍🦰 Mother's Name : {data['mother_name']}\n"
-        f"🪪 Mother's NID : {data['mother_nid']}\n"
-        f"☎️ Mother's Phone : {data['mother_phone']}\n"
+        f"👩‍🦰 Mother : {data['mother_name']}\n"
+        f"🪪 Mother NID : `{data['mother_nid']}`\n"
+        f"☎️ Mother Phone : `{data['mother_phone']}`\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"🏠 Permanent Address : {data['permanent_address']}\n"
-        f"🏠 Present Address : {data['present_address']}\n"
+        f"🏠 Permanent : {data['permanent_address']}\n"
+        f"🏠 Present : {data['present_address']}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"🏫 Department: {data['dept']}\n"
+        f"🏫 Dept: {data['dept']}\n"
         f"🏢 Board: {data['board']}\n"
         f"🎰 GPA: {data['gpa']}\n"
-        f"📆 Session: {data['session']} |\n"
-        f"📚 Year: {data['year']}"
+        f"📆 Session: {data['session']}"
     )
 
 def create_multi_phone_keyboard(std_phone, fat_phone, mot_phone, next_start=None, next_end=None):
