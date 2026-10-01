@@ -721,5 +721,5 @@ def handle_message(message):
 
 if __name__ == "__main__":
     keep_alive()
-    print("🚀 সরকারি সারদা সুন্দর সুন্দরী মহিলা কলেজ বট সফলভাবে চালু হয়েছে...")
+    print("🚀 সরকারি সারদা সুন্দরী মহিলা কলেজ বট সফলভাবে চালু হয়েছে...")
     bot.infinity_polling()
