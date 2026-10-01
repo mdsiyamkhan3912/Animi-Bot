@@ -181,7 +181,7 @@ def fetch_eshiksha_single(session, roll):
 
 def format_eshiksha_caption(data):
     return (
-        f"🏛️ *সরকারি সারদা সুন্দর সুন্দরী মহিলা কলেজ*\n"
+        f"🏛️ *সরকারি সুন্দর সুন্দরী মহিলা কলেজ*\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"👤 *নাম :* {data['name']}\n"
         f"🔢 *Class Roll :* `{data['roll']}`\n"
@@ -428,7 +428,7 @@ def fetch_master_admission_form(session, adm_roll, session_id="22"):
 
 def format_master_caption(data):
     return (
-        f"🏛️ সরকারি সারদা সুন্দর সুন্দরী মহিলা কলেজ (Master Info)\n"
+        f"🏛️ সরকারি সারদা সুন্দরী মহিলা কলেজ (Master Info)\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🔢 Class Roll : `{data['class_roll']}`\n"
         f"🎫 Adm Roll : `{data['adm_roll']}`\n"
